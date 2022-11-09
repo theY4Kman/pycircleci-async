@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "pycircleci-async"
-version = "0.1.0"
+version = "0.1.1"
 description = "Async Python client for CircleCI API"
 authors = [
     "Adrian Kazaku <alpinweis@gmail.com>",
