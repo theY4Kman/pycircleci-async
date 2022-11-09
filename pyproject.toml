@@ -1,0 +1,53 @@
+[tool.poetry]
+name = "pycircleci-async"
+version = "0.1.0"
+description = "Async Python client for CircleCI API"
+authors = [
+    "Adrian Kazaku <alpinweis@gmail.com>",
+    "Zach Kanzler <they4kman@gmail.com>",
+]
+license = "MIT"
+readme = "README.md"
+packages = [{include = "pycircleci_async"}]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Internet",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3 :: Only",
+]
+
+[tool.poetry.dependencies]
+python = "^3.7"
+httpx = "^0.23.0"
+python-dateutil = "^2.8.2"
+
+[tool.poetry.group.dev.dependencies]
+flake8 = "^5.0.4"
+flake8-quotes = "^3.3.1"
+pytest = "^7.2.0"
+pytest-asyncio = "^0.20.1"
+
+[tool.pytest.ini_options]
+addopts = [
+    # Verbosity
+    #  0 - hide test names while running (only showing ".", "F", etc)
+    #  1 - show full test names while running
+    #  2 - don't truncate assertion failure printouts (includes full diffs)
+    "--verbosity=2",
+
+    # Show an abbreviated traceback format
+    "--tb=short",
+]
+
+asyncio_mode = "auto"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

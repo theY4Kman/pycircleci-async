@@ -1,11 +1,11 @@
 # pycircleci
 
-[![PyPI version](https://badge.fury.io/py/pycircleci.svg)](https://badge.fury.io/py/pycircleci)
-[![Build Status](https://github.com/alpinweis/pycircleci/actions/workflows/test.yml/badge.svg?branch=master)](https://github.com/alpinweis/pycircleci/actions/workflows/test.yml?query=branch%3Amaster)
+[![PyPI version](https://badge.fury.io/py/pycircleci-async.svg)](https://badge.fury.io/py/pycircleci-async)
+[![Build Status](https://github.com/theY4Kman/pycircleci-async/actions/workflows/test.yml/badge.svg?branch=master)](https://github.com/theY4Kman/pycircleci-async/actions/workflows/test.yml?query=branch%3Amaster)
 
-Python client for [CircleCI API](https://circleci.com/docs/2.0/api-intro/).
+Asynchronous Python client for [CircleCI API](https://circleci.com/docs/2.0/api-intro/).
 
-Based on the discontinued [circleci.py](https://github.com/levlaz/circleci.py) project.
+Ported from [pycircleci](https://github.com/alpinweis/pycircleci), a fork of the discontinued [circleci.py](https://github.com/levlaz/circleci.py) project.
 
 ## Features
 
@@ -14,7 +14,7 @@ Based on the discontinued [circleci.py](https://github.com/levlaz/circleci.py) p
 
 ## Installation
 
-    $ pip install pycircleci
+    $ pip install pycircleci-async
 
 ## Usage
 
@@ -26,37 +26,30 @@ Set up the expected env vars:
     CIRCLE_API_URL         # CircleCI API base url. Defaults to https://circleci.com/api
 
 ```python
-from pycircleci.api import Api, CIRCLE_TOKEN, CIRCLE_API_URL
+import asyncio
+from pycircleci_async import CircleCIClient
 
-circle_client = Api(token=CIRCLE_TOKEN, url=CIRCLE_API_URL)
 
-# get current user info
-circle_client.get_user_info()
+async def main():
+    async with CircleCIClient(token='<access-token-uuid>') as circle_client:
+        # get current user info
+        await circle_client.get_user_info()
 
-# get list of projects
-results = circle_client.get_projects()
+        # get list of projects
+        results = await circle_client.get_projects()
 
-# pretty print results as json
-circle_client.ppj(results)
 
-# pretty print the details of the last request/response
-circle_client.ppr()
+asyncio.run(main())
 ```
 
-### Interactive development console
-
-     make console
-
-This starts a pre-configured python interactive console which gives you access to a
-`client` object - an instance of the `Api` class to play around. From the console
-type `man()` to see the help screen.
 
 ### Contributing
 
 1. Fork it
-1. Install dev dependencies (`pip install -r requirements-dev.txt`)
-1. Create your feature branch (`git checkout -b my-new-feature`)
-1. Make sure `flake8` and the `pytest` test suite successfully run locally
-1. Commit your changes (`git commit -am 'Add some feature'`)
-1. Push to the branch (`git push origin my-new-feature`)
-1. Create new Pull Request
+2. Install poetry (`pip install poetry`)
+3. Install dependencies (`poetry install`)
+4. Create your feature branch (`git checkout -b my-new-feature`)
+5. Make sure `flake8` and the `pytest` test suite successfully run locally
+6. Commit your changes (`git commit -am 'Add some feature'`)
+7. Push to the branch (`git push origin my-new-feature`)
+8. Create new Pull Request

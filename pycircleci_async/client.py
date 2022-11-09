@@ -1,16 +1,17 @@
-import json
-import os
+from __future__ import annotations
 
-import requests
-from requests.adapters import HTTPAdapter
-from requests.auth import HTTPBasicAuth
-from requests_toolbelt.utils import dump
-from urllib3 import Retry
+import os
+from typing import Collection, TYPE_CHECKING
+
+import httpx
+
+from pycircleci_async.http import RetryTransport
+
+if TYPE_CHECKING:
+    from typing import Self
 
 API_BASE_URL = "https://circleci.com/api"
 
-CIRCLE_TOKEN = os.getenv("CIRCLE_TOKEN")
-CIRCLE_API_URL = os.getenv("CIRCLE_API_URL", API_BASE_URL)
 CIRCLE_API_KEY_HEADER = "Circle-Token"
 
 API_VER_V1 = "v1.1"
@@ -28,46 +29,50 @@ class CircleciError(Exception):
     pass
 
 
-class Api:
+class CircleCIClient:
     """Client for CircleCI API"""
+    
+    token: str
+    url: str
+    _client: httpx.AsyncClient
 
-    def __init__(self, token=None, url=None):
+    def __init__(self, token: str | None = None, url: str | None = None):
         """Initialize a client to interact with CircleCI API.
 
-        :param token: CircleCI API access token. Defaults to CIRCLE_TOKEN env var
-        :param url: The URL of the CircleCI API instance.
+        :param token:
+            CircleCI API access token. Defaults to CIRCLE_TOKEN env var
+            
+        :param url: 
+            The URL of the CircleCI API instance.
             Defaults to https://circleci.com/api. If running a self-hosted
             CircleCI server, the API is available at the ``/api`` endpoint of the
             installation url, i.e. https://circleci.yourcompany.com/api
+            
         """
-        url = CIRCLE_API_URL if url is None else url
-        token = CIRCLE_TOKEN if token is None else token
+        url = os.getenv("CIRCLE_API_URL", API_BASE_URL) if url is None else url
+        token = os.getenv("CIRCLE_TOKEN") if token is None else token
         if not token:
             raise CircleciError("Missing or empty CircleCI API access token")
 
         self.token = token
         self.url = url
-        self._session = self._request_session()
+        self._client = self._init_client()
         self.last_response = None
+
+    async def __aenter__(self) -> Self:
+        await self._client.__aenter__()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self._client.__aexit__(exc_type, exc_val, exc_tb)
 
     def __repr__(self):
         opts = {"token": self.token, "url": self.url}
         kwargs = [f"{k}={v!r}" for k, v in opts.items()]
-        return f'Api({", ".join(kwargs)})'
+        return f'{self.__class__.__name__}({", ".join(kwargs)})'
 
-    def ppj(self, data):
-        """Pretty print data as json"""
-        print(json.dumps(data, indent=2))
-
-    def ppr(self, resp=None):
-        """Pretty print the last request/response details"""
-        resp = self.last_response if resp is None else resp
-        if resp:
-            data = dump.dump_all(resp)
-            print(data.decode("utf-8", "ignore"))
-
-    def get_user_info(self, api_version=None):
-        """Get info about the signed in user.
+    async def get_user_info(self, api_version=None):
+        """Get info about the signed-in user.
 
         :param api_version: Optional API version. Defaults to v1.1
 
@@ -75,33 +80,33 @@ class Api:
             GET ``/me``
         """
         endpoint = "me"
-        resp = self._request(GET, endpoint, api_version=api_version)
+        resp = await self._request(GET, endpoint, api_version=api_version)
         return resp
 
     # alias for get_user_info()
     me = get_user_info
 
-    def get_user_id_info(self, user_id):
+    async def get_user_id_info(self, user_id):
         """Get info about the user with a given ID.
 
         Endpoint:
             GET ``/user/:user-id``
         """
         endpoint = "user/{0}".format(user_id)
-        resp = self._request(GET, endpoint, api_version=API_VER_V2)
+        resp = await self._request(GET, endpoint, api_version=API_VER_V2)
         return resp
 
-    def get_user_collaborations(self):
+    async def get_user_collaborations(self):
         """Get the set of organizations of which a user is a member or a collaborator.
 
         Endpoint:
             GET ``/me/collaborations``
         """
         endpoint = "me/collaborations"
-        resp = self._request(GET, endpoint, api_version=API_VER_V2)
+        resp = await self._request(GET, endpoint, api_version=API_VER_V2)
         return resp
 
-    def get_project(self, slug):
+    async def get_project(self, slug):
         """Get a project by project slug.
 
         :param slug: Project slug.
@@ -110,20 +115,20 @@ class Api:
             GET ``/project/:slug``
         """
         endpoint = "project/{0}".format(slug)
-        resp = self._request(GET, endpoint, api_version=API_VER_V2)
+        resp = await self._request(GET, endpoint, api_version=API_VER_V2)
         return resp
 
-    def get_projects(self):
+    async def get_projects(self):
         """Get list of projects followed.
 
         Endpoint:
             GET ``/projects``
         """
         endpoint = "projects"
-        resp = self._request(GET, endpoint)
+        resp = await self._request(GET, endpoint)
         return resp
 
-    def follow_project(self, username, project, vcs_type=GITHUB):
+    async def follow_project(self, username, project, vcs_type=GITHUB):
         """Follow a project.
 
         :param username: Org or user name.
@@ -135,10 +140,10 @@ class Api:
         """
         slug = self.project_slug(username, project, vcs_type)
         endpoint = "project/{0}/follow".format(slug)
-        resp = self._request(POST, endpoint)
+        resp = await self._request(POST, endpoint)
         return resp
 
-    def get_project_build_summary(
+    async def get_project_build_summary(
         self,
         username,
         project,
@@ -185,10 +190,10 @@ class Api:
         endpoint = "project/{0}".format(slug)
         if branch:
             endpoint += "/tree/{0}".format(branch)
-        resp = self._request(GET, endpoint, params=params)
+        resp = await self._request(GET, endpoint, params=params)
         return resp
 
-    def get_recent_builds(self, limit=30, offset=0, shallow=False):
+    async def get_recent_builds(self, limit=30, offset=0, shallow=False):
         """Get build summary for each of the last 30 recent builds, ordered by build_num.
 
         :param limit: Number of builds to return. Maximum 100, defaults to 30.
@@ -209,10 +214,10 @@ class Api:
             params["shallow"] = True
 
         endpoint = "recent-builds"
-        resp = self._request(GET, endpoint, params=params)
+        resp = await self._request(GET, endpoint, params=params)
         return resp
 
-    def get_build_info(self, username, project, build_num, vcs_type=GITHUB):
+    async def get_build_info(self, username, project, build_num, vcs_type=GITHUB):
         """Get full details of a single build.
 
         :param username: Org or user name.
@@ -225,10 +230,10 @@ class Api:
         """
         slug = self.project_slug(username, project, vcs_type)
         endpoint = "project/{0}/{1}".format(slug, build_num)
-        resp = self._request(GET, endpoint)
+        resp = await self._request(GET, endpoint)
         return resp
 
-    def get_artifacts(self, username, project, build_num, vcs_type=GITHUB):
+    async def get_artifacts(self, username, project, build_num, vcs_type=GITHUB):
         """Get list of artifacts produced by a given build.
 
         :param username: Org or user name.
@@ -241,10 +246,10 @@ class Api:
         """
         slug = self.project_slug(username, project, vcs_type)
         endpoint = "project/{0}/{1}/artifacts".format(slug, build_num)
-        resp = self._request(GET, endpoint)
+        resp = await self._request(GET, endpoint)
         return resp
 
-    def get_latest_artifact(
+    async def get_latest_artifact(
         self,
         username,
         project,
@@ -281,20 +286,20 @@ class Api:
 
         slug = self.project_slug(username, project, vcs_type)
         endpoint = "project/{0}/latest/artifacts".format(slug)
-        resp = self._request(GET, endpoint, params=params)
+        resp = await self._request(GET, endpoint, params=params)
         return resp
 
-    def download_artifact(self, url, destdir=None, filename=None):
+    async def download_artifact(self, url, destdir=None, filename=None):
         """Download an artifact from a url.
 
         :param url: URL to the artifact.
         :param destdir: Destination directory. Defaults to None (current working directory).
         :param filename: File name. Defaults to the name of the artifact file.
         """
-        resp = self._download(url, destdir, filename)
+        resp = await self._download(url, destdir, filename)
         return resp
 
-    def get_test_metadata(self, username, project, build_num, vcs_type=GITHUB):
+    async def get_test_metadata(self, username, project, build_num, vcs_type=GITHUB):
         """Get test metadata for a build.
 
         :param username: Org or user name.
@@ -307,10 +312,10 @@ class Api:
         """
         slug = self.project_slug(username, project, vcs_type)
         endpoint = "project/{0}/{1}/tests".format(slug, build_num)
-        resp = self._request(GET, endpoint)
+        resp = await self._request(GET, endpoint)
         return resp
 
-    def retry_build(self, username, project, build_num, ssh=False, vcs_type=GITHUB):
+    async def retry_build(self, username, project, build_num, ssh=False, vcs_type=GITHUB):
         """Retry a build.
 
         :param username: Org or user name.
@@ -327,10 +332,10 @@ class Api:
         action = "ssh" if ssh else "retry"
         slug = self.project_slug(username, project, vcs_type)
         endpoint = "project/{0}/{1}/{2}".format(slug, build_num, action)
-        resp = self._request(POST, endpoint)
+        resp = await self._request(POST, endpoint)
         return resp
 
-    def cancel_build(self, username, project, build_num, vcs_type=GITHUB):
+    async def cancel_build(self, username, project, build_num, vcs_type=GITHUB):
         """Cancel a build.
 
         :param username: Org or user name.
@@ -343,10 +348,10 @@ class Api:
         """
         slug = self.project_slug(username, project, vcs_type)
         endpoint = "project/{0}/{1}/cancel".format(slug, build_num)
-        resp = self._request(POST, endpoint)
+        resp = await self._request(POST, endpoint)
         return resp
 
-    def get_job_details(self, username, project, job_number, vcs_type=GITHUB):
+    async def get_job_details(self, username, project, job_number, vcs_type=GITHUB):
         """Get job details.
 
         :param username: Org or user name.
@@ -359,10 +364,10 @@ class Api:
         """
         slug = self.project_slug(username, project, vcs_type)
         endpoint = "project/{0}/job/{1}".format(slug, job_number)
-        resp = self._request(GET, endpoint, api_version=API_VER_V2)
+        resp = await self._request(GET, endpoint, api_version=API_VER_V2)
         return resp
 
-    def cancel_job(self, username, project, job_number, vcs_type=GITHUB):
+    async def cancel_job(self, username, project, job_number, vcs_type=GITHUB):
         """Cancel a job.
 
         :param username: Org or user name.
@@ -375,10 +380,10 @@ class Api:
         """
         slug = self.project_slug(username, project, vcs_type)
         endpoint = "project/{0}/job/{1}/cancel".format(slug, job_number)
-        resp = self._request(POST, endpoint, api_version=API_VER_V2)
+        resp = await self._request(POST, endpoint, api_version=API_VER_V2)
         return resp
 
-    def get_project_pipelines(self, username, project, branch=None, mine=False, vcs_type=GITHUB, paginate=False, limit=None):
+    async def get_project_pipelines(self, username, project, branch=None, mine=False, vcs_type=GITHUB, paginate=False, limit=None):
         """Get all pipelines configured for a project.
 
         :param username: Org or user name.
@@ -398,10 +403,10 @@ class Api:
         endpoint = "project/{0}/pipeline".format(slug)
         if mine:
             endpoint += "/mine"
-        resp = self._request_get_items(endpoint, params=params, paginate=paginate, limit=limit)
+        resp = await self._request_get_items(endpoint, params=params, paginate=paginate, limit=limit)
         return resp
 
-    def get_project_pipeline(self, username, project, pipeline_num, vcs_type=GITHUB):
+    async def get_project_pipeline(self, username, project, pipeline_num, vcs_type=GITHUB):
         """Get full details of a given project pipeline by pipeline number.
 
         :param username: Org or user name.
@@ -414,10 +419,10 @@ class Api:
         """
         slug = self.project_slug(username, project, vcs_type)
         endpoint = "project/{0}/pipeline/{1}".format(slug, pipeline_num)
-        resp = self._request(GET, endpoint, api_version=API_VER_V2)
+        resp = await self._request(GET, endpoint, api_version=API_VER_V2)
         return resp
 
-    def continue_pipeline(self, continuation_key, config, params=None):
+    async def continue_pipeline(self, continuation_key, config, params=None):
         """Continue a pipeline from the setup phase.
 
         :param continuation_key: Pipeline continuation key.
@@ -435,10 +440,10 @@ class Api:
             data["parameters"] = params
 
         endpoint = "pipeline/continue"
-        resp = self._request(POST, endpoint, data=data, api_version=API_VER_V2)
+        resp = await self._request(POST, endpoint, data=data, api_version=API_VER_V2)
         return resp
 
-    def get_pipelines(self, username, mine=False, vcs_type=GITHUB, paginate=False, limit=None):
+    async def get_pipelines(self, username, mine=False, vcs_type=GITHUB, paginate=False, limit=None):
         """Get all pipelines for the most recently built projects (max 250) you follow in an org.
 
         :param username: Org or user name.
@@ -455,10 +460,10 @@ class Api:
             params["mine"] = True
 
         endpoint = "pipeline"
-        resp = self._request_get_items(endpoint, params=params, paginate=paginate, limit=limit)
+        resp = await self._request_get_items(endpoint, params=params, paginate=paginate, limit=limit)
         return resp
 
-    def get_pipeline(self, pipeline_id):
+    async def get_pipeline(self, pipeline_id):
         """Get full details of a given pipeline.
 
         :param pipeline_id: Pipieline ID.
@@ -467,10 +472,10 @@ class Api:
             GET ``/pipeline/:pipeline-id``
         """
         endpoint = "pipeline/{0}".format(pipeline_id)
-        resp = self._request(GET, endpoint, api_version=API_VER_V2)
+        resp = await self._request(GET, endpoint, api_version=API_VER_V2)
         return resp
 
-    def get_pipeline_config(self, pipeline_id):
+    async def get_pipeline_config(self, pipeline_id):
         """Get the configuration of a given pipeline.
 
         :param pipeline_id: Pipieline ID.
@@ -479,10 +484,10 @@ class Api:
             GET ``/pipeline/:pipeline-id/config``
         """
         endpoint = "pipeline/{0}/config".format(pipeline_id)
-        resp = self._request(GET, endpoint, api_version=API_VER_V2)
+        resp = await self._request(GET, endpoint, api_version=API_VER_V2)
         return resp
 
-    def get_pipeline_workflow(self, pipeline_id, paginate=False, limit=None):
+    async def get_pipeline_workflow(self, pipeline_id, paginate=False, limit=None):
         """Get the workflow of a given pipeline.
 
         :param pipeline_id: Pipieline ID.
@@ -493,10 +498,10 @@ class Api:
             GET ``/pipeline/:pipeline-id/workflow``
         """
         endpoint = "pipeline/{0}/workflow".format(pipeline_id)
-        resp = self._request_get_items(endpoint, paginate=paginate, limit=limit)
+        resp = await self._request_get_items(endpoint, paginate=paginate, limit=limit)
         return resp
 
-    def get_workflow(self, workflow_id):
+    async def get_workflow(self, workflow_id):
         """Get summary details of a given workflow.
 
         :param workflow_id: Workflow ID.
@@ -505,10 +510,10 @@ class Api:
             GET ``/workflow/:workflow-id``
         """
         endpoint = "workflow/{0}".format(workflow_id)
-        resp = self._request(GET, endpoint, api_version=API_VER_V2)
+        resp = await self._request(GET, endpoint, api_version=API_VER_V2)
         return resp
 
-    def get_workflow_jobs(self, workflow_id, paginate=False, limit=None):
+    async def get_workflow_jobs(self, workflow_id, paginate=False, limit=None):
         """Get list of jobs of a given workflow.
 
         :param workflow_id: Workflow ID.
@@ -519,10 +524,10 @@ class Api:
             GET ``/workflow/:workflow-id/job``
         """
         endpoint = "workflow/{0}/job".format(workflow_id)
-        resp = self._request_get_items(endpoint, paginate=paginate, limit=limit)
+        resp = await self._request_get_items(endpoint, paginate=paginate, limit=limit)
         return resp
 
-    def cancel_workflow(self, workflow_id):
+    async def cancel_workflow(self, workflow_id):
         """Cancel a workflow.
 
         :param workflow_id: Workflow ID.
@@ -531,10 +536,10 @@ class Api:
             POST ``/workflow/:workflow-id/cancel``
         """
         endpoint = "workflow/{0}/cancel".format(workflow_id)
-        resp = self._request(POST, endpoint, api_version=API_VER_V2)
+        resp = await self._request(POST, endpoint, api_version=API_VER_V2)
         return resp
 
-    def rerun_workflow(self, workflow_id, jobs=None, from_failed=False, sparse_tree=False):
+    async def rerun_workflow(self, workflow_id, jobs=None, from_failed=False, sparse_tree=False):
         """Rerun a workflow.
 
         :param workflow_id: Workflow ID.
@@ -550,10 +555,10 @@ class Api:
             data["jobs"] = jobs
 
         endpoint = "workflow/{0}/rerun".format(workflow_id)
-        resp = self._request(POST, endpoint, data=data, api_version=API_VER_V2)
+        resp = await self._request(POST, endpoint, data=data, api_version=API_VER_V2)
         return resp
 
-    def approve_job(self, workflow_id, approval_request_id):
+    async def approve_job(self, workflow_id, approval_request_id):
         """Approve a pending approval job in a workflow.
 
         :param workflow_id: Workflow ID.
@@ -563,10 +568,10 @@ class Api:
             POST ``/workflow/:workflow-id/approve/:approval-request-id``
         """
         endpoint = "workflow/{0}/approve/{1}".format(workflow_id, approval_request_id)
-        resp = self._request(POST, endpoint, api_version=API_VER_V2)
+        resp = await self._request(POST, endpoint, api_version=API_VER_V2)
         return resp
 
-    def add_ssh_user(self, username, project, build_num, vcs_type=GITHUB):
+    async def add_ssh_user(self, username, project, build_num, vcs_type=GITHUB):
         """Add a user to the build SSH permissions.
 
         :param username: Org or user name.
@@ -579,10 +584,10 @@ class Api:
         """
         slug = self.project_slug(username, project, vcs_type)
         endpoint = "project/{0}/{1}/ssh-users".format(slug, build_num)
-        resp = self._request(POST, endpoint)
+        resp = await self._request(POST, endpoint)
         return resp
 
-    def trigger_build(
+    async def trigger_build(
         self,
         username,
         project,
@@ -625,10 +630,10 @@ class Api:
 
         slug = self.project_slug(username, project, vcs_type)
         endpoint = "project/{0}/tree/{1}".format(slug, branch)
-        resp = self._request(POST, endpoint, data=data)
+        resp = await self._request(POST, endpoint, data=data)
         return resp
 
-    def trigger_pipeline(
+    async def trigger_pipeline(
         self,
         username,
         project,
@@ -667,10 +672,10 @@ class Api:
 
         slug = self.project_slug(username, project, vcs_type)
         endpoint = "project/{0}/pipeline".format(slug)
-        resp = self._request(POST, endpoint, data=data, api_version=API_VER_V2)
+        resp = await self._request(POST, endpoint, data=data, api_version=API_VER_V2)
         return resp
 
-    def add_ssh_key(self, username, project, ssh_key, vcs_type=GITHUB, hostname=None):
+    async def add_ssh_key(self, username, project, ssh_key, vcs_type=GITHUB, hostname=None):
         """Create an SSH key.
 
         Used to access external systems that require SSH key-based authentication.
@@ -692,10 +697,10 @@ class Api:
 
         slug = self.project_slug(username, project, vcs_type)
         endpoint = "project/{0}/ssh-key".format(slug)
-        resp = self._request(POST, endpoint, data=params)
+        resp = await self._request(POST, endpoint, data=params)
         return resp
 
-    def list_checkout_keys(self, username, project, vcs_type=GITHUB):
+    async def list_checkout_keys(self, username, project, vcs_type=GITHUB):
         """Get list of checkout keys for a project.
 
         :param username: Org or user name.
@@ -707,10 +712,10 @@ class Api:
         """
         slug = self.project_slug(username, project, vcs_type)
         endpoint = "project/{0}/checkout-key".format(slug)
-        resp = self._request(GET, endpoint)
+        resp = await self._request(GET, endpoint)
         return resp
 
-    def create_checkout_key(self, username, project, key_type, vcs_type=GITHUB):
+    async def create_checkout_key(self, username, project, key_type, vcs_type=GITHUB):
         """Create a new checkout key for a project.
 
         :param username: Org or user name.
@@ -730,10 +735,10 @@ class Api:
 
         slug = self.project_slug(username, project, vcs_type)
         endpoint = "project/{0}/checkout-key".format(slug)
-        resp = self._request(POST, endpoint, data=params)
+        resp = await self._request(POST, endpoint, data=params)
         return resp
 
-    def get_checkout_key(self, username, project, fingerprint, vcs_type=GITHUB):
+    async def get_checkout_key(self, username, project, fingerprint, vcs_type=GITHUB):
         """Get a checkout key.
 
         :param username: Org or user name.
@@ -746,10 +751,10 @@ class Api:
         """
         slug = self.project_slug(username, project, vcs_type)
         endpoint = "project/{0}/checkout-key/{1}".format(slug, fingerprint)
-        resp = self._request(GET, endpoint)
+        resp = await self._request(GET, endpoint)
         return resp
 
-    def delete_checkout_key(self, username, project, fingerprint, vcs_type=GITHUB):
+    async def delete_checkout_key(self, username, project, fingerprint, vcs_type=GITHUB):
         """Delete a checkout key.
 
         :param username: Org or user name.
@@ -762,10 +767,10 @@ class Api:
         """
         slug = self.project_slug(username, project, vcs_type)
         endpoint = "project/{0}/checkout-key/{1}".format(slug, fingerprint)
-        resp = self._request(DELETE, endpoint)
+        resp = await self._request(DELETE, endpoint)
         return resp
 
-    def list_envvars(self, username, project, vcs_type=GITHUB):
+    async def list_envvars(self, username, project, vcs_type=GITHUB):
         """Get list of environment variables for a project.
 
         :param username: Org or user name.
@@ -777,10 +782,10 @@ class Api:
         """
         slug = self.project_slug(username, project, vcs_type)
         endpoint = "project/{0}/envvar".format(slug)
-        resp = self._request(GET, endpoint)
+        resp = await self._request(GET, endpoint)
         return resp
 
-    def add_envvar(self, username, project, name, value, vcs_type=GITHUB):
+    async def add_envvar(self, username, project, name, value, vcs_type=GITHUB):
         """Add an environment variable to project.
 
         :param username: Org or user name.
@@ -796,10 +801,10 @@ class Api:
 
         slug = self.project_slug(username, project, vcs_type)
         endpoint = "project/{0}/envvar".format(slug)
-        resp = self._request(POST, endpoint, data=data)
+        resp = await self._request(POST, endpoint, data=data)
         return resp
 
-    def get_envvar(self, username, project, name, vcs_type=GITHUB):
+    async def get_envvar(self, username, project, name, vcs_type=GITHUB):
         """Get the hidden value of an environment variable.
 
         :param username: Org or user name.
@@ -812,10 +817,10 @@ class Api:
         """
         slug = self.project_slug(username, project, vcs_type)
         endpoint = "project/{0}/envvar/{1}".format(slug, name)
-        resp = self._request(GET, endpoint)
+        resp = await self._request(GET, endpoint)
         return resp
 
-    def delete_envvar(self, username, project, name, vcs_type=GITHUB):
+    async def delete_envvar(self, username, project, name, vcs_type=GITHUB):
         """Delete an environment variable.
 
         :param username: Org or user name.
@@ -828,10 +833,10 @@ class Api:
         """
         slug = self.project_slug(username, project, vcs_type)
         endpoint = "project/{0}/envvar/{1}".format(slug, name)
-        resp = self._request(DELETE, endpoint)
+        resp = await self._request(DELETE, endpoint)
         return resp
 
-    def get_contexts(self, username=None, owner_id=None, owner_type=ORG, vcs_type=GITHUB, paginate=False, limit=None):
+    async def get_contexts(self, username=None, owner_id=None, owner_type=ORG, vcs_type=GITHUB, paginate=False, limit=None):
         """Get contexts for an organization.
 
         :param username: Org or user name.
@@ -852,10 +857,10 @@ class Api:
             params["owner-id"] = owner_id
 
         endpoint = "context"
-        resp = self._request_get_items(endpoint, params=params, paginate=paginate, limit=limit)
+        resp = await self._request_get_items(endpoint, params=params, paginate=paginate, limit=limit)
         return resp
 
-    def get_context(self, context_id):
+    async def get_context(self, context_id):
         """Get a context.
 
         :param context_id: UUID of context to get.
@@ -864,10 +869,10 @@ class Api:
             GET ``/context/:context-id``
         """
         endpoint = "context/{0}".format(context_id)
-        resp = self._request(GET, endpoint, api_version=API_VER_V2)
+        resp = await self._request(GET, endpoint, api_version=API_VER_V2)
         return resp
 
-    def add_context(self, name, username=None, owner_id=None, owner_type=ORG, vcs_type=GITHUB):
+    async def add_context(self, name, username=None, owner_id=None, owner_type=ORG, vcs_type=GITHUB):
         """Add a new context at org or account level.
 
         :param name: Context name to add.
@@ -887,10 +892,10 @@ class Api:
             data["owner"]["id"] = owner_id
 
         endpoint = "context"
-        resp = self._request(POST, endpoint, data=data, api_version=API_VER_V2)
+        resp = await self._request(POST, endpoint, data=data, api_version=API_VER_V2)
         return resp
 
-    def delete_context(self, context_id):
+    async def delete_context(self, context_id):
         """Delete a context.
 
         :param context_id: UUID of context to delete.
@@ -899,10 +904,10 @@ class Api:
             DELETE ``/context/:context-id``
         """
         endpoint = "context/{0}".format(context_id)
-        resp = self._request(DELETE, endpoint, api_version=API_VER_V2)
+        resp = await self._request(DELETE, endpoint, api_version=API_VER_V2)
         return resp
 
-    def get_context_envvars(self, context_id, paginate=False, limit=None):
+    async def get_context_envvars(self, context_id, paginate=False, limit=None):
         """Get environment variables for a context.
 
         :param context_id: ID of context to retrieve environment variables from.
@@ -913,10 +918,10 @@ class Api:
             GET ``/context/:context-id/environment-variable``
         """
         endpoint = "context/{0}/environment-variable".format(context_id)
-        resp = self._request_get_items(endpoint, paginate=paginate, limit=limit)
+        resp = await self._request_get_items(endpoint, paginate=paginate, limit=limit)
         return resp
 
-    def add_context_envvar(self, context_id, name, value):
+    async def add_context_envvar(self, context_id, name, value):
         """Add or update an environment variable to a context.
 
         :param context_id: ID of the context to add environment variable to.
@@ -928,10 +933,10 @@ class Api:
         """
         data = {"value": value}
         endpoint = "context/{0}/environment-variable/{1}".format(context_id, name)
-        resp = self._request(PUT, endpoint, api_version=API_VER_V2, data=data)
+        resp = await self._request(PUT, endpoint, api_version=API_VER_V2, data=data)
         return resp
 
-    def delete_context_envvar(self, context_id, name):
+    async def delete_context_envvar(self, context_id, name):
         """Delete an environment variable from a context.
 
         :param context_id: ID of the context to delete environment variable from.
@@ -941,10 +946,10 @@ class Api:
             DELETE ``/context/:context-id/environment-variable/:name``
         """
         endpoint = "context/{0}/environment-variable/{1}".format(context_id, name)
-        resp = self._request(DELETE, endpoint, api_version=API_VER_V2)
+        resp = await self._request(DELETE, endpoint, api_version=API_VER_V2)
         return resp
 
-    def get_project_settings(self, username, project, vcs_type=GITHUB):
+    async def get_project_settings(self, username, project, vcs_type=GITHUB):
         """Get project advanced settings.
 
         :param username: Org or user name.
@@ -956,10 +961,10 @@ class Api:
         """
         slug = self.project_slug(username, project, vcs_type)
         endpoint = "project/{0}/settings".format(slug)
-        resp = self._request(GET, endpoint)
+        resp = await self._request(GET, endpoint)
         return resp
 
-    def update_project_settings(self, username, project, settings, vcs_type=GITHUB):
+    async def update_project_settings(self, username, project, settings, vcs_type=GITHUB):
         """Update project advanced settings.
 
         :param username: Org or user name.
@@ -975,10 +980,10 @@ class Api:
         """
         slug = self.project_slug(username, project, vcs_type)
         endpoint = "project/{0}/settings".format(slug)
-        resp = self._request(PUT, endpoint, data=settings)
+        resp = await self._request(PUT, endpoint, data=settings)
         return resp
 
-    def get_project_branches(self, username, project, workflow_name=None, vcs_type=GITHUB):
+    async def get_project_branches(self, username, project, workflow_name=None, vcs_type=GITHUB):
         """Get all branches for a given project. The list will only contain branches currently available within Insights.
 
         :param username: Org or user name.
@@ -992,10 +997,10 @@ class Api:
 
         slug = self.project_slug(username, project, vcs_type)
         endpoint = "insights/{0}/branches".format(slug)
-        resp = self._request(GET, endpoint, params=params, api_version=API_VER_V2)
+        resp = await self._request(GET, endpoint, params=params, api_version=API_VER_V2)
         return resp
 
-    def get_project_workflows_metrics(self, username, project, params=None, vcs_type=GITHUB, paginate=False, limit=None):
+    async def get_project_workflows_metrics(self, username, project, params=None, vcs_type=GITHUB, paginate=False, limit=None):
         """Get summary metrics for a project's workflows.
 
         :param username: Org or user name.
@@ -1010,10 +1015,10 @@ class Api:
         """
         slug = self.project_slug(username, project, vcs_type)
         endpoint = "insights/{0}/workflows".format(slug)
-        resp = self._request_get_items(endpoint, params=params, paginate=paginate, limit=limit)
+        resp = await self._request_get_items(endpoint, params=params, paginate=paginate, limit=limit)
         return resp
 
-    def get_project_workflow_metrics(self, username, project, workflow_name, params=None, vcs_type=GITHUB, paginate=False, limit=None):
+    async def get_project_workflow_metrics(self, username, project, workflow_name, params=None, vcs_type=GITHUB, paginate=False, limit=None):
         """Get metrics of recent runs of a project workflow.
 
         :param username: Org or user name.
@@ -1029,10 +1034,10 @@ class Api:
         """
         slug = self.project_slug(username, project, vcs_type)
         endpoint = "insights/{0}/workflows/{1}".format(slug, workflow_name)
-        resp = self._request_get_items(endpoint, params=params, paginate=paginate, limit=limit)
+        resp = await self._request_get_items(endpoint, params=params, paginate=paginate, limit=limit)
         return resp
 
-    def get_project_workflow_test_metrics(self, username, project, workflow_name, params=None, vcs_type=GITHUB):
+    async def get_project_workflow_test_metrics(self, username, project, workflow_name, params=None, vcs_type=GITHUB):
         """Get test metrics of recent runs of a project workflow.
 
         :param username: Org or user name.
@@ -1046,10 +1051,10 @@ class Api:
         """
         slug = self.project_slug(username, project, vcs_type)
         endpoint = "insights/{0}/workflows/{1}/test-metrics".format(slug, workflow_name)
-        resp = self._request(GET, endpoint, params=params, api_version=API_VER_V2)
+        resp = await self._request(GET, endpoint, params=params, api_version=API_VER_V2)
         return resp
 
-    def get_project_workflow_jobs_metrics(self, username, project, workflow_name, params=None, vcs_type=GITHUB, paginate=False, limit=None):
+    async def get_project_workflow_jobs_metrics(self, username, project, workflow_name, params=None, vcs_type=GITHUB, paginate=False, limit=None):
         """Get summary metrics for a project workflow's jobs.
 
         :param username: Org or user name.
@@ -1065,10 +1070,10 @@ class Api:
         """
         slug = self.project_slug(username, project, vcs_type)
         endpoint = "insights/{0}/workflows/{1}/jobs".format(slug, workflow_name)
-        resp = self._request_get_items(endpoint, params=params, paginate=paginate, limit=limit)
+        resp = await self._request_get_items(endpoint, params=params, paginate=paginate, limit=limit)
         return resp
 
-    def get_project_workflow_job_metrics(self, username, project, workflow_name, job_name, params=None, vcs_type=GITHUB, paginate=False, limit=None):
+    async def get_project_workflow_job_metrics(self, username, project, workflow_name, job_name, params=None, vcs_type=GITHUB, paginate=False, limit=None):
         """Get metrics of recent runs of a project workflow job.
 
         :param username: Org or user name.
@@ -1085,10 +1090,10 @@ class Api:
         """
         slug = self.project_slug(username, project, vcs_type)
         endpoint = "insights/{0}/workflows/{1}/jobs/{2}".format(slug, workflow_name, job_name)
-        resp = self._request_get_items(endpoint, params=params, paginate=paginate, limit=limit)
+        resp = await self._request_get_items(endpoint, params=params, paginate=paginate, limit=limit)
         return resp
 
-    def get_schedules(self, username, project, vcs_type=GITHUB):
+    async def get_schedules(self, username, project, vcs_type=GITHUB):
         """Get all schedules for a project.
 
         :param username: Org or user name.
@@ -1100,10 +1105,10 @@ class Api:
         """
         slug = self.project_slug(username, project, vcs_type)
         endpoint = "project/{0}/schedule".format(slug)
-        resp = self._request(GET, endpoint, api_version=API_VER_V2)
+        resp = await self._request(GET, endpoint, api_version=API_VER_V2)
         return resp
 
-    def get_schedule(self, schedule_id):
+    async def get_schedule(self, schedule_id):
         """Get a schedule.
 
         :param schedule_id: UUID of schedule to get.
@@ -1112,10 +1117,10 @@ class Api:
             GET ``/schedule/:schedule-id``
         """
         endpoint = "schedule/{0}".format(schedule_id)
-        resp = self._request(GET, endpoint, api_version=API_VER_V2)
+        resp = await self._request(GET, endpoint, api_version=API_VER_V2)
         return resp
 
-    def add_schedule(self, username, project, name, settings, vcs_type=GITHUB):
+    async def add_schedule(self, username, project, name, settings, vcs_type=GITHUB):
         """Create a schedule.
 
         :param username: Org or user name.
@@ -1135,10 +1140,10 @@ class Api:
 
         slug = self.project_slug(username, project, vcs_type)
         endpoint = "project/{0}/schedule".format(slug)
-        resp = self._request(POST, endpoint, data=data, api_version=API_VER_V2)
+        resp = await self._request(POST, endpoint, data=data, api_version=API_VER_V2)
         return resp
 
-    def update_schedule(self, schedule_id, settings):
+    async def update_schedule(self, schedule_id, settings):
         """Update a schedule.
 
         :param schedule_id: UUID of schedule to update.
@@ -1151,10 +1156,10 @@ class Api:
             PATCH ``/schedule/:schedule-id``
         """
         endpoint = "schedule/{0}".format(schedule_id)
-        resp = self._request(PATCH, endpoint, data=settings, api_version=API_VER_V2)
+        resp = await self._request(PATCH, endpoint, data=settings, api_version=API_VER_V2)
         return resp
 
-    def delete_schedule(self, schedule_id):
+    async def delete_schedule(self, schedule_id):
         """Delete a schedule.
 
         :param schedule_id: UUID of schedule to delete.
@@ -1163,7 +1168,7 @@ class Api:
             DELETE ``/schedule/:schedule-id``
         """
         endpoint = "schedule/{0}".format(schedule_id)
-        resp = self._request(DELETE, endpoint, api_version=API_VER_V2)
+        resp = await self._request(DELETE, endpoint, api_version=API_VER_V2)
         return resp
 
     def project_slug(self, username, reponame, vcs_type=GITHUB):
@@ -1211,36 +1216,45 @@ class Api:
             return API_VER_V2
         raise CircleciError("Invalid CircleCI API version: {}. Valid values are: {}".format(api_version, API_VERSIONS))
 
-    def _request_session(
+    def _init_client(
         self,
-        retries=3,
-        backoff_factor=0.3,
-        status_forcelist=(408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524),
-    ):
-        """Get a session with Retry enabled.
+        retries: int = 3,
+        backoff_factor: float = 0.3,
+        status_forcelist: Collection[int] = (408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524),
+    ) -> httpx.AsyncClient:
+        """Get an async httpx client with Retry enabled.
 
-        :param retries: Number of retries to allow.
-        :param backoff_factor: Backoff factor to apply between attempts.
-        :param status_forcelist: HTTP status codes to force a retry on.
+        :param retries:
+            Number of retries to allow.
 
-        :returns: A requests.Session object.
+        :param backoff_factor:
+            Backoff factor to apply between attempts.
+
+        :param status_forcelist:
+            HTTP status codes to force a retry on.
+
+        :return:
+            An httpx.AsyncClient object
+
         """
-        session = requests.Session()
-        retry = Retry(
-            total=retries,
-            backoff_factor=backoff_factor,
-            status_forcelist=status_forcelist,
-            allowed_methods=False,
-            raise_on_redirect=False,
-            raise_on_status=False,
-            respect_retry_after_header=False,
+        client = httpx.AsyncClient(
+            transport=RetryTransport(
+                httpx.AsyncHTTPTransport(),
+                max_attempts=retries,
+                backoff_factor=backoff_factor,
+                retry_status_codes=status_forcelist,
+                respect_retry_after_header=False,
+            ),
+            auth=httpx.BasicAuth(self.token, ''),
+            headers={
+                'Accept': 'application/json',
+                CIRCLE_API_KEY_HEADER: self.token,
+            },
+            base_url=self.url,
         )
-        adapter = HTTPAdapter(max_retries=retry)
-        session.mount("http://", adapter)
-        session.mount("https://", adapter)
-        return session
+        return client
 
-    def _request(self, verb, endpoint, data=None, params=None, api_version=None):
+    async def _request(self, verb: str, endpoint: str, data=None, params=None, api_version=None):
         """Send an HTTP request.
 
         :param verb: HTTP method: DELETE, GET, PATCH, POST, PUT
@@ -1256,32 +1270,28 @@ class Api:
 
         :returns: A JSON object with the response from the API.
         """
-        headers = {"Accept": "application/json", "Circle-Token": self.token}
-        auth = HTTPBasicAuth(self.token, "")
-        resp = None
-
         api_version = self.validate_api_version(api_version)
-        request_url = "{0}/{1}/{2}".format(self.url, api_version, endpoint)
+        request_url = f"{api_version}/{endpoint}"
 
         verb = verb.upper()
         if verb == GET:
-            resp = self._session.get(request_url, params=params, auth=auth, headers=headers)
+            resp = await self._client.get(request_url, params=params)
         elif verb == POST:
-            resp = self._session.post(request_url, params=params, auth=auth, headers=headers, json=data)
+            resp = await self._client.post(request_url, params=params, json=data)
         elif verb == PUT:
-            resp = self._session.put(request_url, params=params, auth=auth, headers=headers, json=data)
+            resp = await self._client.put(request_url, params=params, json=data)
         elif verb == PATCH:
-            resp = self._session.patch(request_url, params=params, auth=auth, headers=headers, json=data)
+            resp = await self._client.patch(request_url, params=params, json=data)
         elif verb == DELETE:
-            resp = self._session.delete(request_url, params=params, auth=auth, headers=headers)
+            resp = await self._client.delete(request_url, params=params)
         else:
-            raise CircleciError("Invalid HTTP method: {}. Valid values are: {}".format(verb, HTTP_METHODS))
+            raise CircleciError(f"Invalid HTTP method: {verb}. Valid values are: {HTTP_METHODS}")
 
         self.last_response = resp
         resp.raise_for_status()
         return resp.json()
 
-    def _request_get_items(self, endpoint, params=None, paginate=False, limit=None):
+    async def _request_get_items(self, endpoint, params=None, paginate=False, limit=None):
         """Send one or more HTTP GET requests and optionally depaginate results, up to a limit. Only supported by API v2
 
         :param endpoint: API endpoint to GET.
@@ -1299,7 +1309,7 @@ class Api:
         params = {} if params is None else params.copy()
 
         while True:
-            resp = self._request(GET, endpoint, params=params, api_version=API_VER_V2)
+            resp = await self._request(GET, endpoint, params=params, api_version=API_VER_V2)
             items = resp["items"]
             results.extend(items)
             if not paginate or not resp["next_page_token"] or (limit and len(results) >= limit):
@@ -1308,7 +1318,7 @@ class Api:
 
         return results[:limit]
 
-    def _download(self, url, destdir=None, filename=None):
+    async def _download(self, url, destdir=None, filename=None):
         """Download artifact file by url.
 
         :param url: URL to the artifact.
@@ -1319,12 +1329,11 @@ class Api:
         filename = url.split("/")[-1] if filename is None else filename
 
         headers = {CIRCLE_API_KEY_HEADER: self.token}
-        resp = self._session.get(url, headers=headers, stream=True)
+        resp = await self._client.get(url, headers=headers)
 
         path = "{0}/{1}".format(destdir, filename)
         with open(path, "wb") as f:
-            for chunk in resp.iter_content(chunk_size=1024):
-                if chunk:
-                    f.write(chunk)
+            for chunk in resp.iter_bytes(chunk_size=1024):
+                f.write(chunk)
 
         return path
