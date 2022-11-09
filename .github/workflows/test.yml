@@ -18,6 +18,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
           architecture: x64
       - name: Install dependencies
-        run: poetry install
+        run: |
+          pip install -U poetry
+          poetry install
       - run: poetry run python -m flake8
       - run: poetry run python -m pytest -v
