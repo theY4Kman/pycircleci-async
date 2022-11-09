@@ -2,7 +2,7 @@ import json
 import pytest
 from unittest.mock import AsyncMock
 
-from pycircleci_async.api import CircleCIClient, CircleciError, DELETE, GET, POST, PUT
+from pycircleci_async.client import CircleCIClient, CircleciError, DELETE, GET, POST, PUT
 
 TEST_ID = "deadbeef-dead-beef-dead-deaddeafbeef"
 
