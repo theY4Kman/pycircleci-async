@@ -31,7 +31,7 @@ class CircleciError(Exception):
 
 class CircleCIClient:
     """Client for CircleCI API"""
-    
+
     token: str
     url: str
     _client: httpx.AsyncClient
@@ -41,13 +41,13 @@ class CircleCIClient:
 
         :param token:
             CircleCI API access token. Defaults to CIRCLE_TOKEN env var
-            
-        :param url: 
+
+        :param url:
             The URL of the CircleCI API instance.
             Defaults to https://circleci.com/api. If running a self-hosted
             CircleCI server, the API is available at the ``/api`` endpoint of the
             installation url, i.e. https://circleci.yourcompany.com/api
-            
+
         """
         url = os.getenv("CIRCLE_API_URL", API_BASE_URL) if url is None else url
         token = os.getenv("CIRCLE_TOKEN") if token is None else token
@@ -1245,9 +1245,9 @@ class CircleCIClient:
                 retry_status_codes=status_forcelist,
                 respect_retry_after_header=False,
             ),
-            auth=httpx.BasicAuth(self.token, ''),
+            auth=httpx.BasicAuth(self.token, ""),
             headers={
-                'Accept': 'application/json',
+                "Accept": "application/json",
                 CIRCLE_API_KEY_HEADER: self.token,
             },
             base_url=self.url,

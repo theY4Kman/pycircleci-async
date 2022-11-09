@@ -56,7 +56,7 @@ class RetryTransport(httpx.AsyncBaseTransport, httpx.BaseTransport):
                 diff = (parsed_date - datetime.now().astimezone()).total_seconds()
                 if diff > 0:
                     return min(diff, self.max_backoff_wait)
-            except ValueError as _ex:
+            except ValueError:
                 pass
 
         backoff = self.backoff_factor * (2 ** (attempts_made - 1))
